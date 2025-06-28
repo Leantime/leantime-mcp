@@ -2,12 +2,35 @@
 
 A Model Context Protocol (MCP) proxy bridge for Leantime project management system. This tool acts as a bridge between MCP clients and Leantime servers, forwarding JSON-RPC messages with proper authentication.
 
+
 ## Installation
 
 ### From npm (once published)
 ```bash
-npm install -g leantime-mcp-bridge
+npm install -g leantime-mcp
 ```
+
+
+## Use in clients
+
+### Claude Desktop
+
+```
+{
+  "mcpServers": {
+    "leantime": {
+      "command": "node",
+      "args": [
+        "leantime-mcp",
+        "https://your-leantime.com/mcp",
+        "--token", "YOUR_TOKEN_HERE"
+      ]
+    }
+  }
+}
+
+```
+
 
 ### From source
 ```bash
