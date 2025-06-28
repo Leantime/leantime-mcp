@@ -42,6 +42,7 @@ const isHttps = url.protocol === 'https:';
 const requestModule = isHttps ? https : http;
 
 let buffer = '';
+let activeRequest = null;
 
 process.stdin.setEncoding('utf8');
 process.stdin.on('readable', () => {
@@ -60,48 +61,230 @@ process.stdin.on('readable', () => {
     }
 });
 
+function parseSSEEvent(data) {
+    const lines = data.split('\n');
+    let eventData = '';
+    let eventType = '';
+
+    for (const line of lines) {
+        if (line.startsWith('data: ')) {
+            eventData += line.substring(6);
+        } else if (line.startsWith('event: ')) {
+            eventType = line.substring(7);
+        }
+    }
+
+    return { type: eventType, data: eventData };
+}
+
 function sendToServer(jsonRpcMessage) {
     const postData = jsonRpcMessage;
+
+    // Parse the message to check if it's a tool call for logging
+    let messageType = 'unknown';
+    try {
+        const parsed = JSON.parse(jsonRpcMessage);
+        messageType = parsed.method || 'unknown';
+        if (parsed.method === 'tools/call') {
+            console.error(`Tool call: ${parsed.params?.name || 'unknown'}`);
+        }
+
+        // Warn about large requests (tool parameters can be big)
+        if (postData.length > 1048576) { // 1MB
+            console.error(`Large request: ${Math.round(postData.length / 1024)}KB`);
+        }
+    } catch (e) {
+        console.error('Invalid JSON in outgoing message');
+    }
 
     const options = {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'Accept': 'application/json',
+            'Accept': 'application/json, text/event-stream',
             'Authorization': `Bearer ${bearerToken}`,
-            'Content-Length': Buffer.byteLength(postData)
-        }
+            'Content-Length': Buffer.byteLength(postData),
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
+        },
+        // Increase timeout for tool execution
+        timeout: 300000 // 5 minutes for long-running tools
     };
 
     if (skipSsl && isHttps) {
         options.rejectUnauthorized = false;
     }
 
-    const req = requestModule.request(serverUrl, options, (res) => {
-        let responseData = '';
+    // Close any existing request first
+    if (activeRequest) {
+        activeRequest.destroy();
+        activeRequest = null;
+    }
 
-        res.on('data', (chunk) => {
-            responseData += chunk;
-        });
+    activeRequest = requestModule.request(serverUrl, options, (res) => {
+        const contentType = res.headers['content-type'] || '';
+        const isSSE = contentType.includes('text/event-stream');
 
-        res.on('end', () => {
-            process.stdout.write(responseData + '\n');
+        console.error(`Response Content-Type: ${contentType}`);
+        console.error(`Using SSE mode: ${isSSE}`);
+
+        if (isSSE) {
+            // Handle Server-Sent Events - important for streaming tool results
+            let sseBuffer = '';
+
+            res.on('data', (chunk) => {
+                sseBuffer += chunk.toString();
+
+                // Process complete SSE events (double newline separated)
+                const events = sseBuffer.split('\n\n');
+                sseBuffer = events.pop(); // Keep incomplete event in buffer
+
+                events.forEach(eventData => {
+                    if (eventData.trim()) {
+                        const event = parseSSEEvent(eventData);
+
+                        // Handle different event types
+                        if (event.type === 'message' || !event.type) {
+                            // Standard message event - could be tool results
+                            if (event.data) {
+                                try {
+                                    const parsed = JSON.parse(event.data);
+                                    // Log tool results for debugging
+                                    if (parsed.result && parsed.result.content) {
+                                        console.error(`Tool result received (${parsed.result.content.length} chars)`);
+                                    }
+                                    process.stdout.write(event.data + '\n');
+                                } catch (e) {
+                                    console.error(`Invalid JSON in SSE data: ${e.message}`);
+                                    console.error(`Data: ${event.data}`);
+                                }
+                            }
+                        } else if (event.type === 'error') {
+                            console.error(`SSE Error: ${event.data}`);
+                        } else if (event.type === 'close') {
+                            console.error('SSE connection closed by server');
+                            res.destroy();
+                        } else if (event.type === 'progress') {
+                            // Handle progress events for long-running tools
+                            console.error(`Tool progress: ${event.data}`);
+                            if (event.data) {
+                                try {
+                                    JSON.parse(event.data);
+                                    process.stdout.write(event.data + '\n');
+                                } catch (e) {
+                                    console.error(`Invalid JSON in progress event: ${e.message}`);
+                                }
+                            }
+                        } else {
+                            // Forward other event types as-is (tool-specific events)
+                            if (event.data) {
+                                try {
+                                    JSON.parse(event.data);
+                                    process.stdout.write(event.data + '\n');
+                                } catch (e) {
+                                    console.error(`Non-JSON SSE event (${event.type}): ${event.data}`);
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+
+            res.on('end', () => {
+                // Process any remaining data in buffer
+                if (sseBuffer.trim()) {
+                    const event = parseSSEEvent(sseBuffer);
+                    if (event.data) {
+                        try {
+                            JSON.parse(event.data);
+                            process.stdout.write(event.data + '\n');
+                        } catch (e) {
+                            console.error(`Invalid JSON in final SSE data: ${e.message}`);
+                        }
+                    }
+                }
+                console.error('SSE stream ended');
+                activeRequest = null;
+            });
+
+        } else {
+            // Handle regular JSON response - could be tool results
+            let responseData = '';
+
+            res.on('data', (chunk) => {
+                responseData += chunk;
+
+                // Warn about large responses (tool results can be big)
+                if (responseData.length > 1048576) { // 1MB
+                    console.error(`Large response received: ${Math.round(responseData.length / 1024)}KB`);
+                }
+            });
+
+            res.on('end', () => {
+                if (responseData.trim()) {
+                    try {
+                        const parsed = JSON.parse(responseData);
+                        // Log tool results for debugging
+                        if (parsed.result && parsed.result.content) {
+                            console.error(`Tool result received: ${parsed.result.content.length} chars`);
+                        } else if (parsed.error) {
+                            console.error(`Tool error: ${parsed.error.message || 'Unknown error'}`);
+                        }
+                        process.stdout.write(responseData + '\n');
+                    } catch (e) {
+                        console.error(`Invalid JSON response: ${e.message}`);
+                        console.error(`Response: ${responseData.substring(0, 500)}...`);
+                    }
+                }
+                activeRequest = null;
+            });
+        }
+
+        res.on('error', (e) => {
+            console.error(`Response error: ${e.message}`);
+            activeRequest = null;
         });
     });
 
-    req.on('error', (e) => {
+    activeRequest.on('error', (e) => {
         console.error(`Request error: ${e.message}`);
+        activeRequest = null;
     });
 
-    req.write(postData);
-    req.end();
+    activeRequest.on('timeout', () => {
+        console.error('Request timeout');
+        if (activeRequest) {
+            activeRequest.destroy();
+            activeRequest = null;
+        }
+    });
+
+    activeRequest.write(postData);
+    activeRequest.end();
 }
 
-process.on('SIGINT', () => {
+// Handle graceful shutdown
+function cleanup() {
+    console.error('Shutting down...');
+    if (activeRequest) {
+        activeRequest.destroy();
+        activeRequest = null;
+    }
     process.exit(0);
+}
+
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);
+
+// Handle stdin end
+process.stdin.on('end', () => {
+    console.error('Input stream ended');
+    cleanup();
 });
 
 // Log startup info to stderr (won't interfere with MCP communication)
 console.error(`Leantime MCP Bridge starting...`);
 console.error(`Server: ${serverUrl}`);
 console.error(`SSL verification: ${skipSsl ? 'disabled' : 'enabled'}`);
+console.error(`Supports: HTTP JSON responses and Server-Sent Events (SSE)`);
+console.error(`Tool call features: Large payload support, streaming results, 5min timeout`);
