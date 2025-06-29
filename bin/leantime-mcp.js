@@ -52,9 +52,10 @@ const isHttps = url.protocol === 'https:';
 const requestModule = isHttps ? https : http;
 
 let buffer = '';
-let activeRequest = null;
+let activeRequests = new Map(); // Track multiple concurrent requests
 let connectionCount = 0;
 let isShuttingDown = false;
+let mcpSessionId = null; // Store session ID from server
 
 process.stdin.setEncoding('utf8');
 process.stdin.on('readable', () => {
@@ -157,16 +158,19 @@ function sendToServer(jsonRpcMessage) {
         options.rejectUnauthorized = false;
     }
 
-    // Close any existing request first (shouldn't happen in normal operation)
-    if (activeRequest) {
-        console.error(`[Request #${requestId}] Warning: Closing previous active request`);
-        activeRequest.destroy();
-        activeRequest = null;
-    }
+    // Don't close previous requests - handle them concurrently
+    // Each request gets its own entry in the activeRequests map
 
-    activeRequest = requestModule.request(serverUrl, options, (res) => {
+    const currentRequest = requestModule.request(serverUrl, options, (res) => {
         const contentType = res.headers['content-type'] || '';
         const isSSE = contentType.includes('text/event-stream');
+
+        // Extract MCP session ID from response headers (if present)
+        const sessionId = res.headers['mcp-session-id'];
+        if (sessionId && !mcpSessionId) {
+            mcpSessionId = sessionId;
+            console.error(`[Request #${requestId}] Captured MCP Session ID: ${sessionId.substring(0, 8)}...`);
+        }
 
         console.error(`[Request #${requestId}] Response Status: ${res.statusCode}`);
         console.error(`[Request #${requestId}] Response Headers:`, JSON.stringify(res.headers, null, 2));
@@ -249,7 +253,7 @@ function sendToServer(jsonRpcMessage) {
                     }
                 }
                 console.error(`[Request #${requestId}] SSE stream ended`);
-                activeRequest = null;
+                activeRequests.delete(requestId);
             });
 
         } else {
@@ -275,38 +279,46 @@ function sendToServer(jsonRpcMessage) {
                         } else if (parsed.error) {
                             console.error(`[Request #${requestId}] Tool error: ${parsed.error.message || 'Unknown error'}`);
                         }
-                        process.stdout.write(responseData + '\n');
+
+                        // Ensure we send clean JSON
+                        const cleanJson = JSON.stringify(parsed);
+                        process.stdout.write(cleanJson + '\n');
                         console.error(`[Request #${requestId}] Completed successfully`);
                     } catch (e) {
                         console.error(`[Request #${requestId}] Invalid JSON response: ${e.message}`);
                         console.error(`Response: ${responseData.substring(0, 500)}...`);
+                        // Try to send the raw response anyway in case it's partially valid
+                        process.stdout.write(responseData + '\n');
                     }
                 }
-                activeRequest = null;
+                activeRequests.delete(requestId);
             });
         }
 
         res.on('error', (e) => {
             console.error(`[Request #${requestId}] Response error: ${e.message}`);
-            activeRequest = null;
+            activeRequests.delete(requestId);
         });
     });
 
-    activeRequest.on('error', (e) => {
+    // Store the request in our tracking map
+    activeRequests.set(requestId, currentRequest);
+
+    currentRequest.on('error', (e) => {
         console.error(`[Request #${requestId}] Request error: ${e.message}`);
-        activeRequest = null;
+        activeRequests.delete(requestId);
     });
 
-    activeRequest.on('timeout', () => {
+    currentRequest.on('timeout', () => {
         console.error(`[Request #${requestId}] Request timeout (5 minutes)`);
-        if (activeRequest) {
-            activeRequest.destroy();
-            activeRequest = null;
+        if (activeRequests.has(requestId)) {
+            activeRequests.get(requestId).destroy();
+            activeRequests.delete(requestId);
         }
     });
 
-    activeRequest.write(postData);
-    activeRequest.end();
+    currentRequest.write(postData);
+    currentRequest.end();
 }
 
 // Handle graceful shutdown
@@ -315,10 +327,13 @@ function cleanup() {
     isShuttingDown = true;
 
     console.error(`Shutting down bridge after handling ${connectionCount} requests...`);
-    if (activeRequest) {
-        console.error('Closing active request...');
-        activeRequest.destroy();
-        activeRequest = null;
+    if (activeRequests.size > 0) {
+        console.error(`Closing ${activeRequests.size} active requests...`);
+        for (const [requestId, request] of activeRequests) {
+            console.error(`Closing request #${requestId}`);
+            request.destroy();
+        }
+        activeRequests.clear();
     }
     process.exit(0);
 }
@@ -339,5 +354,6 @@ console.error(`Server: ${serverUrl}`);
 console.error(`Auth Method: ${authMethod}`);
 console.error(`SSL verification: ${skipSsl ? 'disabled' : 'enabled'}`);
 console.error(`Supports: HTTP JSON responses and Server-Sent Events (SSE)`);
+console.error(`Features: Session management, concurrent requests, large payloads`);
 console.error(`Tool call features: Large payload support, streaming results, 5min timeout`);
 console.error(`Ready to handle MCP requests...`);
