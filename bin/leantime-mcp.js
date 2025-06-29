@@ -26,8 +26,8 @@ if (!serverUrl || !bearerToken) {
     console.error('Usage: leantime-mcp-bridge <url> --token <token> [--insecure]');
     console.error('');
     console.error('Examples:');
-    console.error('  leantime-mcp https://leantime.example.com/mcp --token abc123');
-    console.error('  leantime-mcp https://localhost/mcp --token abc123 --insecure');
+    console.error('  leantime-mcp-bridge https://leantime.example.com/mcp --token abc123');
+    console.error('  leantime-mcp-bridge https://localhost/mcp --token abc123 --insecure');
     process.exit(1);
 }
 
@@ -43,6 +43,8 @@ const requestModule = isHttps ? https : http;
 
 let buffer = '';
 let activeRequest = null;
+let connectionCount = 0;
+let isShuttingDown = false;
 
 process.stdin.setEncoding('utf8');
 process.stdin.on('readable', () => {
@@ -78,6 +80,15 @@ function parseSSEEvent(data) {
 }
 
 function sendToServer(jsonRpcMessage) {
+    if (isShuttingDown) {
+        console.error('Bridge is shutting down, ignoring request');
+        return;
+    }
+
+    connectionCount++;
+    const requestId = connectionCount;
+    console.error(`[Request #${requestId}] Starting...`);
+
     const postData = jsonRpcMessage;
 
     // Parse the message to check if it's a tool call for logging
@@ -85,16 +96,17 @@ function sendToServer(jsonRpcMessage) {
     try {
         const parsed = JSON.parse(jsonRpcMessage);
         messageType = parsed.method || 'unknown';
+        console.error(`[Request #${requestId}] Method: ${messageType}`);
         if (parsed.method === 'tools/call') {
-            console.error(`Tool call: ${parsed.params?.name || 'unknown'}`);
+            console.error(`[Request #${requestId}] Tool call: ${parsed.params?.name || 'unknown'}`);
         }
 
         // Warn about large requests (tool parameters can be big)
         if (postData.length > 1048576) { // 1MB
-            console.error(`Large request: ${Math.round(postData.length / 1024)}KB`);
+            console.error(`[Request #${requestId}] Large request: ${Math.round(postData.length / 1024)}KB`);
         }
     } catch (e) {
-        console.error('Invalid JSON in outgoing message');
+        console.error(`[Request #${requestId}] Invalid JSON in outgoing message`);
     }
 
     const options = {
@@ -105,7 +117,7 @@ function sendToServer(jsonRpcMessage) {
             'Authorization': `Bearer ${bearerToken}`,
             'Content-Length': Buffer.byteLength(postData),
             'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive'
+            'Connection': 'keep-alive'  // Prefer persistent connections
         },
         // Increase timeout for tool execution
         timeout: 300000 // 5 minutes for long-running tools
@@ -115,8 +127,9 @@ function sendToServer(jsonRpcMessage) {
         options.rejectUnauthorized = false;
     }
 
-    // Close any existing request first
+    // Close any existing request first (shouldn't happen in normal operation)
     if (activeRequest) {
+        console.error(`[Request #${requestId}] Warning: Closing previous active request`);
         activeRequest.destroy();
         activeRequest = null;
     }
@@ -125,8 +138,8 @@ function sendToServer(jsonRpcMessage) {
         const contentType = res.headers['content-type'] || '';
         const isSSE = contentType.includes('text/event-stream');
 
-        console.error(`Response Content-Type: ${contentType}`);
-        console.error(`Using SSE mode: ${isSSE}`);
+        console.error(`[Request #${requestId}] Response Content-Type: ${contentType}`);
+        console.error(`[Request #${requestId}] Using SSE mode: ${isSSE}`);
 
         if (isSSE) {
             // Handle Server-Sent Events - important for streaming tool results
@@ -151,28 +164,28 @@ function sendToServer(jsonRpcMessage) {
                                     const parsed = JSON.parse(event.data);
                                     // Log tool results for debugging
                                     if (parsed.result && parsed.result.content) {
-                                        console.error(`Tool result received (${parsed.result.content.length} chars)`);
+                                        console.error(`[Request #${requestId}] Tool result received (${parsed.result.content.length} chars)`);
                                     }
                                     process.stdout.write(event.data + '\n');
                                 } catch (e) {
-                                    console.error(`Invalid JSON in SSE data: ${e.message}`);
+                                    console.error(`[Request #${requestId}] Invalid JSON in SSE data: ${e.message}`);
                                     console.error(`Data: ${event.data}`);
                                 }
                             }
                         } else if (event.type === 'error') {
-                            console.error(`SSE Error: ${event.data}`);
+                            console.error(`[Request #${requestId}] SSE Error: ${event.data}`);
                         } else if (event.type === 'close') {
-                            console.error('SSE connection closed by server');
+                            console.error(`[Request #${requestId}] SSE connection closed by server`);
                             res.destroy();
                         } else if (event.type === 'progress') {
                             // Handle progress events for long-running tools
-                            console.error(`Tool progress: ${event.data}`);
+                            console.error(`[Request #${requestId}] Tool progress: ${event.data}`);
                             if (event.data) {
                                 try {
                                     JSON.parse(event.data);
                                     process.stdout.write(event.data + '\n');
                                 } catch (e) {
-                                    console.error(`Invalid JSON in progress event: ${e.message}`);
+                                    console.error(`[Request #${requestId}] Invalid JSON in progress event: ${e.message}`);
                                 }
                             }
                         } else {
@@ -182,7 +195,7 @@ function sendToServer(jsonRpcMessage) {
                                     JSON.parse(event.data);
                                     process.stdout.write(event.data + '\n');
                                 } catch (e) {
-                                    console.error(`Non-JSON SSE event (${event.type}): ${event.data}`);
+                                    console.error(`[Request #${requestId}] Non-JSON SSE event (${event.type}): ${event.data}`);
                                 }
                             }
                         }
@@ -199,11 +212,11 @@ function sendToServer(jsonRpcMessage) {
                             JSON.parse(event.data);
                             process.stdout.write(event.data + '\n');
                         } catch (e) {
-                            console.error(`Invalid JSON in final SSE data: ${e.message}`);
+                            console.error(`[Request #${requestId}] Invalid JSON in final SSE data: ${e.message}`);
                         }
                     }
                 }
-                console.error('SSE stream ended');
+                console.error(`[Request #${requestId}] SSE stream ended`);
                 activeRequest = null;
             });
 
@@ -216,7 +229,7 @@ function sendToServer(jsonRpcMessage) {
 
                 // Warn about large responses (tool results can be big)
                 if (responseData.length > 1048576) { // 1MB
-                    console.error(`Large response received: ${Math.round(responseData.length / 1024)}KB`);
+                    console.error(`[Request #${requestId}] Large response received: ${Math.round(responseData.length / 1024)}KB`);
                 }
             });
 
@@ -226,13 +239,14 @@ function sendToServer(jsonRpcMessage) {
                         const parsed = JSON.parse(responseData);
                         // Log tool results for debugging
                         if (parsed.result && parsed.result.content) {
-                            console.error(`Tool result received: ${parsed.result.content.length} chars`);
+                            console.error(`[Request #${requestId}] Tool result received: ${parsed.result.content.length} chars`);
                         } else if (parsed.error) {
-                            console.error(`Tool error: ${parsed.error.message || 'Unknown error'}`);
+                            console.error(`[Request #${requestId}] Tool error: ${parsed.error.message || 'Unknown error'}`);
                         }
                         process.stdout.write(responseData + '\n');
+                        console.error(`[Request #${requestId}] Completed successfully`);
                     } catch (e) {
-                        console.error(`Invalid JSON response: ${e.message}`);
+                        console.error(`[Request #${requestId}] Invalid JSON response: ${e.message}`);
                         console.error(`Response: ${responseData.substring(0, 500)}...`);
                     }
                 }
@@ -241,18 +255,18 @@ function sendToServer(jsonRpcMessage) {
         }
 
         res.on('error', (e) => {
-            console.error(`Response error: ${e.message}`);
+            console.error(`[Request #${requestId}] Response error: ${e.message}`);
             activeRequest = null;
         });
     });
 
     activeRequest.on('error', (e) => {
-        console.error(`Request error: ${e.message}`);
+        console.error(`[Request #${requestId}] Request error: ${e.message}`);
         activeRequest = null;
     });
 
     activeRequest.on('timeout', () => {
-        console.error('Request timeout');
+        console.error(`[Request #${requestId}] Request timeout (5 minutes)`);
         if (activeRequest) {
             activeRequest.destroy();
             activeRequest = null;
@@ -265,8 +279,12 @@ function sendToServer(jsonRpcMessage) {
 
 // Handle graceful shutdown
 function cleanup() {
-    console.error('Shutting down...');
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    console.error(`Shutting down bridge after handling ${connectionCount} requests...`);
     if (activeRequest) {
+        console.error('Closing active request...');
         activeRequest.destroy();
         activeRequest = null;
     }
@@ -278,13 +296,15 @@ process.on('SIGTERM', cleanup);
 
 // Handle stdin end
 process.stdin.on('end', () => {
-    console.error('Input stream ended');
+    console.error('Input stream ended - client disconnected');
     cleanup();
 });
 
 // Log startup info to stderr (won't interfere with MCP communication)
-console.error(`Leantime MCP Bridge starting...`);
+console.error(`=== Leantime MCP Bridge Starting ===`);
+console.error(`Mode: Long-running persistent connection`);
 console.error(`Server: ${serverUrl}`);
 console.error(`SSL verification: ${skipSsl ? 'disabled' : 'enabled'}`);
 console.error(`Supports: HTTP JSON responses and Server-Sent Events (SSE)`);
 console.error(`Tool call features: Large payload support, streaming results, 5min timeout`);
+console.error(`Ready to handle MCP requests...`);
