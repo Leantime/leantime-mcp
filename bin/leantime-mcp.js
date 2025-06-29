@@ -90,112 +90,238 @@ function parseSSEEvent(data) {
     return { type: eventType, data: eventData };
 }
 
-function sendToServer(jsonRpcMessage) {
-    if (isShuttingDown) {
-        console.error('Bridge is shutting down, ignoring request');
-        return;
-    }
-
-    connectionCount++;
-    const requestId = connectionCount;
-    console.error(`[Request #${requestId}] Starting...`);
-
-    const postData = jsonRpcMessage;
-
-    // Parse the message to check if it's a tool call for logging
-    let messageType = 'unknown';
+function isValidJsonRpcResponse(data) {
     try {
-        const parsed = JSON.parse(jsonRpcMessage);
-        messageType = parsed.method || 'unknown';
-        console.error(`[Request #${requestId}] Method: ${messageType}`);
-        if (parsed.method === 'tools/call') {
-            console.error(`[Request #${requestId}] Tool call: ${parsed.params?.name || 'unknown'}`);
+        const parsed = JSON.parse(data);
+
+        // Check if it has required JSON-RPC fields
+        if (!parsed.jsonrpc || parsed.jsonrpc !== "2.0") {
+            return false;
         }
 
-        // Warn about large requests (tool parameters can be big)
-        if (postData.length > 1048576) { // 1MB
-            console.error(`[Request #${requestId}] Large request: ${Math.round(postData.length / 1024)}KB`);
+        // Must have either result or error, and an id
+        if (parsed.id === undefined) {
+            return false;
         }
+
+        if (parsed.result === undefined && parsed.error === undefined) {
+            return false;
+        }
+
+        // Check for PHP error fields that shouldn't be in JSON-RPC
+        const phpErrorFields = ['message', 'exception', 'file', 'line', 'trace'];
+        const hasPhpErrorFields = phpErrorFields.some(field =>
+            parsed[field] !== undefined && typeof parsed[field] === 'string'
+        );
+
+        if (hasPhpErrorFields && !parsed.result && !parsed.error) {
+            return false;
+        }
+
+        return true;
     } catch (e) {
-        console.error(`[Request #${requestId}] Invalid JSON in outgoing message`);
+        return false;
     }
+}
 
-    // Build headers with appropriate auth method
-    const headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream',
-        'Content-Length': Buffer.byteLength(postData)
-        // Removed Cache-Control and Connection headers for testing
-    };
+function convertServerErrorToJsonRpc(responseData, requestId = null) {
+    try {
+        const parsed = JSON.parse(responseData);
 
-    // Add authentication header based on method
-    if (authMethod === 'X-API-Key') {
-        headers['X-API-Key'] = bearerToken;
-        console.error(`[Request #${requestId}] Auth: X-API-Key: ${bearerToken.substring(0, 8)}...`);
-    } else if (authMethod === 'ApiKey') {
-        headers['Authorization'] = `ApiKey ${bearerToken}`;
-        console.error(`[Request #${requestId}] Auth: Authorization: ApiKey ${bearerToken.substring(0, 8)}...`);
-    } else if (authMethod === 'Token') {
-        headers['Authorization'] = `Token ${bearerToken}`;
-        console.error(`[Request #${requestId}] Auth: Authorization: Token ${bearerToken.substring(0, 8)}...`);
-    } else {
-        // Default to Bearer
-        headers['Authorization'] = `Bearer ${bearerToken}`;
-        console.error(`[Request #${requestId}] Auth: Authorization: Bearer ${bearerToken.substring(0, 8)}...`);
-    }
+        // If it looks like a PHP error/exception
+        if (parsed.message || parsed.exception) {
+            const isNullIdError = parsed.exception && parsed.exception.includes('Argument #2 ($id) must be of type string|int, null given');
 
-    console.error(`[Request #${requestId}] Full headers:`, JSON.stringify(headers, null, 2));
-    console.error(`[Request #${requestId}] Request body: ${postData.substring(0, 200)}...`);
+            if (isNullIdError) {
+                // This is the php-mcp null ID bug - convert to a proper notification response
+                console.error(`Detected php-mcp null ID bug - this is a server-side issue with notifications`);
+                return ''; // Return empty for notifications since they don't expect responses
+            }
 
-    const options = {
-        method: 'POST',
-        headers: headers,
-        // Increase timeout for tool execution
-        timeout: 300000 // 5 minutes for long-running tools
-    };
-
-    if (skipSsl && isHttps) {
-        options.rejectUnauthorized = false;
-    }
-
-    // Don't close previous requests - handle them concurrently
-    // Each request gets its own entry in the activeRequests map
-
-    const currentRequest = requestModule.request(serverUrl, options, (res) => {
-        const contentType = res.headers['content-type'] || '';
-        const isSSE = contentType.includes('text/event-stream');
-
-        // Extract MCP session ID from response headers (if present)
-        const sessionId = res.headers['mcp-session-id'];
-        if (sessionId && !mcpSessionId) {
-            mcpSessionId = sessionId;
-            console.error(`[Request #${requestId}] Captured MCP Session ID: ${sessionId.substring(0, 8)}...`);
+            return JSON.stringify({
+                jsonrpc: "2.0",
+                id: requestId,
+                error: {
+                    code: -32603, // Internal error
+                    message: parsed.message || "Server internal error",
+                    data: {
+                        type: "server_error",
+                        details: parsed.exception || parsed.message || "Unknown server error"
+                    }
+                }
+            });
         }
 
-        console.error(`[Request #${requestId}] Response Status: ${res.statusCode}`);
-        console.error(`[Request #${requestId}] Response Headers:`, JSON.stringify(res.headers, null, 2));
-        console.error(`[Request #${requestId}] Response Content-Type: ${contentType}`);
-        console.error(`[Request #${requestId}] Using SSE mode: ${isSSE}`);
+        // If it's an array of errors (like the Zod validation)
+        if (Array.isArray(parsed)) {
+            return JSON.stringify({
+                jsonrpc: "2.0",
+                id: requestId,
+                error: {
+                    code: -32600, // Invalid Request
+                    message: "Server validation error",
+                    data: {
+                        type: "validation_error",
+                        details: parsed
+                    }
+                }
+            });
+        }
 
-        if (isSSE) {
-            // Handle Server-Sent Events - important for streaming tool results
-            let sseBuffer = '';
+        // Generic server error
+        return JSON.stringify({
+            jsonrpc: "2.0",
+            id: requestId,
+            error: {
+                code: -32603,
+                message: "Invalid server response",
+                data: {
+                    type: "malformed_response",
+                    original: responseData.substring(0, 200)
+                }
+            }
+        });
 
-            res.on('data', (chunk) => {
-                sseBuffer += chunk.toString();
+    } catch (e) {
+        // Can't even parse as JSON
+        return JSON.stringify({
+            jsonrpc: "2.0",
+            id: requestId,
+            error: {
+                code: -32700, // Parse error
+                message: "Invalid JSON response from server",
+                data: {
+                    type: "parse_error",
+                    original: responseData.substring(0, 200)
+                }
+            }
+        });
+    }
+}
+if (isShuttingDown) {
+    console.error('Bridge is shutting down, ignoring request');
+    return;
+}
 
-                // Process complete SSE events (double newline separated)
-                const events = sseBuffer.split('\n\n');
-                sseBuffer = events.pop(); // Keep incomplete event in buffer
+connectionCount++;
+const requestId = connectionCount;
+console.error(`[Request #${requestId}] Starting...`);
 
-                events.forEach(eventData => {
-                    if (eventData.trim()) {
-                        const event = parseSSEEvent(eventData);
+const postData = jsonRpcMessage;
 
-                        // Handle different event types
-                        if (event.type === 'message' || !event.type) {
-                            // Standard message event - could be tool results
-                            if (event.data) {
+// Parse the message to check if it's a tool call for logging
+let messageType = 'unknown';
+try {
+    const parsed = JSON.parse(jsonRpcMessage);
+    messageType = parsed.method || 'unknown';
+    console.error(`[Request #${requestId}] Method: ${messageType}`);
+    if (parsed.method === 'tools/call') {
+        console.error(`[Request #${requestId}] Tool call: ${parsed.params?.name || 'unknown'}`);
+    }
+
+    // Warn about large requests (tool parameters can be big)
+    if (postData.length > 1048576) { // 1MB
+        console.error(`[Request #${requestId}] Large request: ${Math.round(postData.length / 1024)}KB`);
+    }
+} catch (e) {
+    console.error(`[Request #${requestId}] Invalid JSON in outgoing message`);
+}
+
+// Build headers with appropriate auth method
+const headers = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json, text/event-stream',
+    'Content-Length': Buffer.byteLength(postData)
+    // Removed Cache-Control and Connection headers for testing
+};
+
+// Add authentication header based on method
+if (authMethod === 'X-API-Key') {
+    headers['X-API-Key'] = bearerToken;
+    console.error(`[Request #${requestId}] Auth: X-API-Key: ${bearerToken.substring(0, 8)}...`);
+} else if (authMethod === 'ApiKey') {
+    headers['Authorization'] = `ApiKey ${bearerToken}`;
+    console.error(`[Request #${requestId}] Auth: Authorization: ApiKey ${bearerToken.substring(0, 8)}...`);
+} else if (authMethod === 'Token') {
+    headers['Authorization'] = `Token ${bearerToken}`;
+    console.error(`[Request #${requestId}] Auth: Authorization: Token ${bearerToken.substring(0, 8)}...`);
+} else {
+    // Default to Bearer
+    headers['Authorization'] = `Bearer ${bearerToken}`;
+    console.error(`[Request #${requestId}] Auth: Authorization: Bearer ${bearerToken.substring(0, 8)}...`);
+}
+
+console.error(`[Request #${requestId}] Full headers:`, JSON.stringify(headers, null, 2));
+console.error(`[Request #${requestId}] Request body: ${postData.substring(0, 200)}...`);
+
+const options = {
+    method: 'POST',
+    headers: headers,
+    // Increase timeout for tool execution
+    timeout: 300000 // 5 minutes for long-running tools
+};
+
+if (skipSsl && isHttps) {
+    options.rejectUnauthorized = false;
+}
+
+// Don't close previous requests - handle them concurrently
+// Each request gets its own entry in the activeRequests map
+
+const currentRequest = requestModule.request(serverUrl, options, (res) => {
+    const contentType = res.headers['content-type'] || '';
+    const isSSE = contentType.includes('text/event-stream');
+
+    // Extract MCP session ID from response headers (if present)
+    // Check multiple possible header formats
+    const sessionId = res.headers['mcp-session-id'] ||
+        res.headers['Mcp-Session-Id'] ||
+        res.headers['MCP-Session-ID'] ||
+        res.headers['mcp_session_id'];
+
+    if (sessionId) {
+        if (!mcpSessionId) {
+            mcpSessionId = sessionId;
+            console.error(`[Request #${requestId}] *** CAPTURED MCP Session ID: ${sessionId} ***`);
+        } else if (mcpSessionId !== sessionId) {
+            console.error(`[Request #${requestId}] WARNING: Session ID changed! Old: ${mcpSessionId}, New: ${sessionId}`);
+            mcpSessionId = sessionId;
+        } else {
+            console.error(`[Request #${requestId}] Session ID confirmed: ${sessionId}`);
+        }
+    } else {
+        console.error(`[Request #${requestId}] No session ID in response headers`);
+    }
+
+    console.error(`[Request #${requestId}] Response Status: ${res.statusCode}`);
+    if (res.statusCode >= 400) {
+        console.error(`[Request #${requestId}] *** ERROR RESPONSE - Status ${res.statusCode} ***`);
+    }
+    console.error(`[Request #${requestId}] Response Headers:`, JSON.stringify(res.headers, null, 2));
+    console.error(`[Request #${requestId}] Response Content-Type: ${contentType}`);
+    console.error(`[Request #${requestId}] Using SSE mode: ${isSSE}`);
+
+    if (isSSE) {
+        // Handle Server-Sent Events - important for streaming tool results
+        let sseBuffer = '';
+
+        res.on('data', (chunk) => {
+            sseBuffer += chunk.toString();
+
+            // Process complete SSE events (double newline separated)
+            const events = sseBuffer.split('\n\n');
+            sseBuffer = events.pop(); // Keep incomplete event in buffer
+
+            events.forEach(eventData => {
+                if (eventData.trim()) {
+                    const event = parseSSEEvent(eventData);
+
+                    // Handle different event types
+                    if (event.type === 'message' || !event.type) {
+                        // Standard message event - could be tool results
+                        if (event.data) {
+                            // Validate JSON-RPC response before forwarding
+                            if (isValidJsonRpcResponse(event.data)) {
                                 try {
                                     const parsed = JSON.parse(event.data);
                                     // Log tool results for debugging
@@ -205,72 +331,82 @@ function sendToServer(jsonRpcMessage) {
                                     process.stdout.write(event.data + '\n');
                                 } catch (e) {
                                     console.error(`[Request #${requestId}] Invalid JSON in SSE data: ${e.message}`);
-                                    console.error(`Data: ${event.data}`);
                                 }
-                            }
-                        } else if (event.type === 'error') {
-                            console.error(`[Request #${requestId}] SSE Error: ${event.data}`);
-                        } else if (event.type === 'close') {
-                            console.error(`[Request #${requestId}] SSE connection closed by server`);
-                            res.destroy();
-                        } else if (event.type === 'progress') {
-                            // Handle progress events for long-running tools
-                            console.error(`[Request #${requestId}] Tool progress: ${event.data}`);
-                            if (event.data) {
-                                try {
-                                    JSON.parse(event.data);
-                                    process.stdout.write(event.data + '\n');
-                                } catch (e) {
-                                    console.error(`[Request #${requestId}] Invalid JSON in progress event: ${e.message}`);
-                                }
-                            }
-                        } else {
-                            // Forward other event types as-is (tool-specific events)
-                            if (event.data) {
-                                try {
-                                    JSON.parse(event.data);
-                                    process.stdout.write(event.data + '\n');
-                                } catch (e) {
-                                    console.error(`[Request #${requestId}] Non-JSON SSE event (${event.type}): ${event.data}`);
+                            } else {
+                                console.error(`[Request #${requestId}] Invalid JSON-RPC response in SSE, converting to error`);
+                                const errorResponse = convertServerErrorToJsonRpc(event.data, jsonRpcId);
+                                if (errorResponse.trim()) {
+                                    process.stdout.write(errorResponse + '\n');
+                                } else {
+                                    console.error(`[Request #${requestId}] Notification with server error in SSE - not forwarding response`);
                                 }
                             }
                         }
-                    }
-                });
-            });
-
-            res.on('end', () => {
-                // Process any remaining data in buffer
-                if (sseBuffer.trim()) {
-                    const event = parseSSEEvent(sseBuffer);
-                    if (event.data) {
-                        try {
-                            JSON.parse(event.data);
-                            process.stdout.write(event.data + '\n');
-                        } catch (e) {
-                            console.error(`[Request #${requestId}] Invalid JSON in final SSE data: ${e.message}`);
+                    } else if (event.type === 'error') {
+                        console.error(`[Request #${requestId}] SSE Error: ${event.data}`);
+                    } else if (event.type === 'close') {
+                        console.error(`[Request #${requestId}] SSE connection closed by server`);
+                        res.destroy();
+                    } else if (event.type === 'progress') {
+                        // Handle progress events for long-running tools
+                        console.error(`[Request #${requestId}] Tool progress: ${event.data}`);
+                        if (event.data) {
+                            try {
+                                JSON.parse(event.data);
+                                process.stdout.write(event.data + '\n');
+                            } catch (e) {
+                                console.error(`[Request #${requestId}] Invalid JSON in progress event: ${e.message}`);
+                            }
+                        }
+                    } else {
+                        // Forward other event types as-is (tool-specific events)
+                        if (event.data) {
+                            try {
+                                JSON.parse(event.data);
+                                process.stdout.write(event.data + '\n');
+                            } catch (e) {
+                                console.error(`[Request #${requestId}] Non-JSON SSE event (${event.type}): ${event.data}`);
+                            }
                         }
                     }
                 }
-                console.error(`[Request #${requestId}] SSE stream ended`);
-                activeRequests.delete(requestId);
             });
+        });
 
-        } else {
-            // Handle regular JSON response - could be tool results
-            let responseData = '';
-
-            res.on('data', (chunk) => {
-                responseData += chunk;
-
-                // Warn about large responses (tool results can be big)
-                if (responseData.length > 1048576) { // 1MB
-                    console.error(`[Request #${requestId}] Large response received: ${Math.round(responseData.length / 1024)}KB`);
+        res.on('end', () => {
+            // Process any remaining data in buffer
+            if (sseBuffer.trim()) {
+                const event = parseSSEEvent(sseBuffer);
+                if (event.data) {
+                    try {
+                        JSON.parse(event.data);
+                        process.stdout.write(event.data + '\n');
+                    } catch (e) {
+                        console.error(`[Request #${requestId}] Invalid JSON in final SSE data: ${e.message}`);
+                    }
                 }
-            });
+            }
+            console.error(`[Request #${requestId}] SSE stream ended`);
+            activeRequests.delete(requestId);
+        });
 
-            res.on('end', () => {
-                if (responseData.trim()) {
+    } else {
+        // Handle regular JSON response - could be tool results
+        let responseData = '';
+
+        res.on('data', (chunk) => {
+            responseData += chunk;
+
+            // Warn about large responses (tool results can be big)
+            if (responseData.length > 1048576) { // 1MB
+                console.error(`[Request #${requestId}] Large response received: ${Math.round(responseData.length / 1024)}KB`);
+            }
+        });
+
+        res.on('end', () => {
+            if (responseData.trim()) {
+                // Validate JSON-RPC response before forwarding
+                if (isValidJsonRpcResponse(responseData)) {
                     try {
                         const parsed = JSON.parse(responseData);
                         // Log tool results for debugging
@@ -285,41 +421,52 @@ function sendToServer(jsonRpcMessage) {
                         process.stdout.write(cleanJson + '\n');
                         console.error(`[Request #${requestId}] Completed successfully`);
                     } catch (e) {
-                        console.error(`[Request #${requestId}] Invalid JSON response: ${e.message}`);
-                        console.error(`Response: ${responseData.substring(0, 500)}...`);
-                        // Try to send the raw response anyway in case it's partially valid
-                        process.stdout.write(responseData + '\n');
+                        console.error(`[Request #${requestId}] JSON parse error: ${e.message}`);
+                        const errorResponse = convertServerErrorToJsonRpc(responseData, jsonRpcId);
+                        process.stdout.write(errorResponse + '\n');
+                    }
+                } else {
+                    console.error(`[Request #${requestId}] Invalid JSON-RPC response from server, converting to error`);
+                    console.error(`Raw response: ${responseData.substring(0, 500)}...`);
+                    const errorResponse = convertServerErrorToJsonRpc(responseData, jsonRpcId);
+                    if (errorResponse.trim()) {
+                        process.stdout.write(errorResponse + '\n');
+                    } else {
+                        console.error(`[Request #${requestId}] Notification with server error - not forwarding response`);
                     }
                 }
-                activeRequests.delete(requestId);
-            });
-        }
-
-        res.on('error', (e) => {
-            console.error(`[Request #${requestId}] Response error: ${e.message}`);
+            } else {
+                console.error(`[Request #${requestId}] Empty response from server`);
+            }
             activeRequests.delete(requestId);
         });
-    });
+    }
 
-    // Store the request in our tracking map
-    activeRequests.set(requestId, currentRequest);
-
-    currentRequest.on('error', (e) => {
-        console.error(`[Request #${requestId}] Request error: ${e.message}`);
+    res.on('error', (e) => {
+        console.error(`[Request #${requestId}] Response error: ${e.message}`);
         activeRequests.delete(requestId);
     });
+});
 
-    currentRequest.on('timeout', () => {
-        console.error(`[Request #${requestId}] Request timeout (5 minutes)`);
-        if (activeRequests.has(requestId)) {
-            activeRequests.get(requestId).destroy();
-            activeRequests.delete(requestId);
-        }
-    });
+// Store the request in our tracking map
+activeRequests.set(requestId, currentRequest);
 
-    currentRequest.write(postData);
-    currentRequest.end();
-}
+currentRequest.on('error', (e) => {
+    console.error(`[Request #${requestId}] Request error: ${e.message}`);
+    activeRequests.delete(requestId);
+});
+
+currentRequest.on('timeout', () => {
+    console.error(`[Request #${requestId}] Request timeout (5 minutes)`);
+    if (activeRequests.has(requestId)) {
+        activeRequests.get(requestId).destroy();
+        activeRequests.delete(requestId);
+    }
+});
+
+currentRequest.write(postData);
+currentRequest.end();
+
 
 // Handle graceful shutdown
 function cleanup() {
@@ -354,6 +501,6 @@ console.error(`Server: ${serverUrl}`);
 console.error(`Auth Method: ${authMethod}`);
 console.error(`SSL verification: ${skipSsl ? 'disabled' : 'enabled'}`);
 console.error(`Supports: HTTP JSON responses and Server-Sent Events (SSE)`);
-console.error(`Features: Session management, concurrent requests, large payloads`);
+console.error(`Features: Session management, concurrent requests, large payloads, php-mcp compatibility`);
 console.error(`Tool call features: Large payload support, streaming results, 5min timeout`);
 console.error(`Ready to handle MCP requests...`);
