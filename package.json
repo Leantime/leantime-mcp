@@ -1,13 +1,17 @@
 {
   "name": "leantime-mcp",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "A Model Context Protocol (MCP) proxy bridge for Leantime project management system",
-  "main": "bin/leantime-mcp.js",
+  "type": "module",
+  "main": "dist/index.js",
   "bin": {
     "leantime-mcp": "./bin/leantime-mcp.js"
   },
   "scripts": {
+    "build": "tsc && chmod +x bin/leantime-mcp.js",
+    "dev": "tsc --watch",
     "start": "node bin/leantime-mcp.js",
+    "prepublishOnly": "npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
@@ -22,7 +26,7 @@
   "author": "Marcel Folaron <marcel@leantime.io>",
   "license": "MIT",
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   },
   "repository": {
     "type": "git",
@@ -34,7 +38,15 @@
   "homepage": "https://github.com/leantime/leantime-mcp#readme",
   "files": [
     "bin/",
+    "dist/",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.4.0"
+  }
 }
