@@ -7,12 +7,15 @@ const { URL } = require('url');
 
 // Parse command line arguments
 const args = process.argv.slice(2);
-let serverUrl, bearerToken, skipSsl = false;
+let serverUrl, bearerToken, skipSsl = false, authMethod = 'Bearer';
 
 // Parse arguments
 for (let i = 0; i < args.length; i++) {
     if (args[i] === '--token' && i + 1 < args.length) {
         bearerToken = args[i + 1];
+        i++;
+    } else if (args[i] === '--auth-method' && i + 1 < args.length) {
+        authMethod = args[i + 1];
         i++;
     } else if (args[i] === '--insecure' || args[i] === '--skip-ssl') {
         skipSsl = true;
@@ -23,11 +26,18 @@ for (let i = 0; i < args.length; i++) {
 
 // Validate required arguments
 if (!serverUrl || !bearerToken) {
-    console.error('Usage: leantime-mcp-bridge <url> --token <token> [--insecure]');
+    console.error('Usage: leantime-mcp <url> --token <token> [--auth-method <method>] [--insecure]');
+    console.error('');
+    console.error('Auth Methods:');
+    console.error('  Bearer (default) - Authorization: Bearer <token>');
+    console.error('  ApiKey           - Authorization: ApiKey <token>');
+    console.error('  Token            - Authorization: Token <token>');
+    console.error('  X-API-Key        - X-API-Key: <token>');
     console.error('');
     console.error('Examples:');
-    console.error('  leantime-mcp-bridge https://leantime.example.com/mcp --token abc123');
-    console.error('  leantime-mcp-bridge https://localhost/mcp --token abc123 --insecure');
+    console.error('  leantime-mcp https://leantime.example.com/mcp --token abc123');
+    console.error('  leantime-mcp https://leantime.example.com/mcp --token abc123 --auth-method ApiKey');
+    console.error('  leantime-mcp https://localhost/mcp --token abc123 --insecure --auth-method X-API-Key');
     process.exit(1);
 }
 
@@ -109,16 +119,36 @@ function sendToServer(jsonRpcMessage) {
         console.error(`[Request #${requestId}] Invalid JSON in outgoing message`);
     }
 
+    // Build headers with appropriate auth method
+    const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream',
+        'Content-Length': Buffer.byteLength(postData)
+        // Removed Cache-Control and Connection headers for testing
+    };
+
+    // Add authentication header based on method
+    if (authMethod === 'X-API-Key') {
+        headers['X-API-Key'] = bearerToken;
+        console.error(`[Request #${requestId}] Auth: X-API-Key: ${bearerToken.substring(0, 8)}...`);
+    } else if (authMethod === 'ApiKey') {
+        headers['Authorization'] = `ApiKey ${bearerToken}`;
+        console.error(`[Request #${requestId}] Auth: Authorization: ApiKey ${bearerToken.substring(0, 8)}...`);
+    } else if (authMethod === 'Token') {
+        headers['Authorization'] = `Token ${bearerToken}`;
+        console.error(`[Request #${requestId}] Auth: Authorization: Token ${bearerToken.substring(0, 8)}...`);
+    } else {
+        // Default to Bearer
+        headers['Authorization'] = `Bearer ${bearerToken}`;
+        console.error(`[Request #${requestId}] Auth: Authorization: Bearer ${bearerToken.substring(0, 8)}...`);
+    }
+
+    console.error(`[Request #${requestId}] Full headers:`, JSON.stringify(headers, null, 2));
+    console.error(`[Request #${requestId}] Request body: ${postData.substring(0, 200)}...`);
+
     const options = {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json, text/event-stream',
-            'Authorization': `Bearer ${bearerToken}`,
-            'Content-Length': Buffer.byteLength(postData),
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive'  // Prefer persistent connections
-        },
+        headers: headers,
         // Increase timeout for tool execution
         timeout: 300000 // 5 minutes for long-running tools
     };
@@ -138,6 +168,8 @@ function sendToServer(jsonRpcMessage) {
         const contentType = res.headers['content-type'] || '';
         const isSSE = contentType.includes('text/event-stream');
 
+        console.error(`[Request #${requestId}] Response Status: ${res.statusCode}`);
+        console.error(`[Request #${requestId}] Response Headers:`, JSON.stringify(res.headers, null, 2));
         console.error(`[Request #${requestId}] Response Content-Type: ${contentType}`);
         console.error(`[Request #${requestId}] Using SSE mode: ${isSSE}`);
 
@@ -304,6 +336,7 @@ process.stdin.on('end', () => {
 console.error(`=== Leantime MCP Bridge Starting ===`);
 console.error(`Mode: Long-running persistent connection`);
 console.error(`Server: ${serverUrl}`);
+console.error(`Auth Method: ${authMethod}`);
 console.error(`SSL verification: ${skipSsl ? 'disabled' : 'enabled'}`);
 console.error(`Supports: HTTP JSON responses and Server-Sent Events (SSE)`);
 console.error(`Tool call features: Large payload support, streaming results, 5min timeout`);
