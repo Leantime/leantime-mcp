@@ -13,7 +13,7 @@ A robust Model Context Protocol (MCP) proxy bridge for Leantime project manageme
 
 ## 🚀 Installation
 
-### From npm (once published)
+### From npm
 ```bash
 npm install -g leantime-mcp
 ```
@@ -29,10 +29,11 @@ npm install -g .
 
 ## 📖 Usage
 
-### Claude Desktop Configuration
+### 🖥️ Claude Desktop Configuration
 
 Add to your `claude_desktop_config.json`:
 
+#### Basic Configuration
 ```json
 {
   "mcpServers": {
@@ -42,17 +43,13 @@ Add to your `claude_desktop_config.json`:
         "https://your-leantime.com/mcp",
         "--token",
         "YOUR_TOKEN_HERE"
-      ],
-      "env": {
-        "LEANTIME_TOKEN": "YOUR_TOKEN_HERE"
-      }
+      ]
     }
   }
 }
 ```
 
 #### For Local Development with Self-Signed Certificates
-
 ```json
 {
   "mcpServers": {
@@ -69,8 +66,7 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-#### Using Absolute Path (if global install doesn't work)
-
+#### Using Absolute Path
 ```json
 {
   "mcpServers": {
@@ -87,7 +83,225 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-### Command Line Usage
+#### Production Configuration with Enhanced Security
+```json
+{
+  "mcpServers": {
+    "leantime": {
+      "command": "leantime-mcp",
+      "args": [
+        "https://your-leantime.com/mcp",
+        "--token",
+        "YOUR_TOKEN_HERE",
+        "--auth-method",
+        "Bearer",
+        "--max-retries",
+        "5",
+        "--retry-delay",
+        "2000"
+      ]
+    }
+  }
+}
+```
+
+### 💻 Claude Code Configuration
+
+For Claude Code, add to your `claude_config.json` or use the command line:
+
+#### Configuration File
+```json
+{
+  "mcp": {
+    "servers": {
+      "leantime": {
+        "command": "leantime-mcp",
+        "args": [
+          "https://your-leantime.com/mcp",
+          "--token",
+          "YOUR_TOKEN_HERE"
+        ]
+      }
+    }
+  }
+}
+```
+
+#### Command Line Usage
+```bash
+claude --mcp-server leantime="leantime-mcp https://your-leantime.com/mcp --token YOUR_TOKEN_HERE"
+```
+
+### 🎯 Cursor Configuration
+
+For Cursor IDE, add to your workspace settings or global settings:
+
+#### Workspace Settings (`.vscode/settings.json`)
+```json
+{
+  "mcp.servers": {
+    "leantime": {
+      "command": "leantime-mcp",
+      "args": [
+        "https://your-leantime.com/mcp",
+        "--token",
+        "YOUR_TOKEN_HERE"
+      ]
+    }
+  }
+}
+```
+
+#### Global Settings
+Open Cursor Settings → Extensions → MCP and add:
+```json
+{
+  "leantime": {
+    "command": "leantime-mcp",
+    "args": [
+      "https://your-leantime.com/mcp",
+      "--token",
+      "YOUR_TOKEN_HERE"
+    ]
+  }
+}
+```
+
+### 🤖 OpenAI/ChatGPT Custom GPT Configuration
+
+For ChatGPT with MCP support or OpenAI API integration:
+
+#### OpenAI API Configuration
+```python
+# Python example using OpenAI with MCP
+import openai
+from mcp_client import MCPClient
+
+# Initialize MCP client
+mcp_client = MCPClient(
+    command="leantime-mcp",
+    args=[
+        "https://your-leantime.com/mcp",
+        "--token",
+        "YOUR_TOKEN_HERE"
+    ]
+)
+
+# Use with OpenAI
+client = openai.OpenAI(api_key="your-openai-key")
+response = client.chat.completions.create(
+    model="gpt-4",
+    messages=[{"role": "user", "content": "Show me my Leantime projects"}],
+    tools=mcp_client.get_tools()
+)
+```
+
+#### Custom GPT Actions Configuration
+```yaml
+# For Custom GPT Actions
+openapi: 3.0.0
+info:
+  title: Leantime MCP Proxy
+  version: 2.0.0
+servers:
+  - url: https://your-leantime.com/mcp
+paths:
+  /tools/list:
+    post:
+      summary: List available tools
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                jsonrpc:
+                  type: string
+                  default: "2.0"
+                method:
+                  type: string
+                  default: "tools/list"
+                id:
+                  type: integer
+      security:
+        - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+```
+
+### 🌐 Universal MCP Client Configuration
+
+For any MCP-compatible client:
+
+#### Standard MCP Configuration
+```json
+{
+  "name": "leantime",
+  "command": "leantime-mcp",
+  "args": [
+    "https://your-leantime.com/mcp",
+    "--token",
+    "YOUR_TOKEN_HERE"
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
+}
+```
+
+#### Docker Configuration
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  leantime-mcp:
+    image: node:18-alpine
+    command: npx leantime-mcp https://your-leantime.com/mcp --token YOUR_TOKEN_HERE
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - ./config:/config
+    stdin_open: true
+    tty: true
+```
+
+### 📱 Environment-Specific Examples
+
+#### Development Environment
+```bash
+# Local testing with debug logging
+leantime-mcp https://localhost:8080/mcp \
+  --token "dev-token-123" \
+  --insecure \
+  --no-cache \
+  --max-retries 1 \
+  2>debug.log
+```
+
+#### Staging Environment
+```bash
+# Staging with moderate reliability
+leantime-mcp https://staging.leantime.com/mcp \
+  --token "staging-token-456" \
+  --max-retries 3 \
+  --retry-delay 1000
+```
+
+#### Production Environment
+```bash
+# Production with high reliability
+leantime-mcp https://leantime.company.com/mcp \
+  --token "prod-token-789" \
+  --auth-method Bearer \
+  --max-retries 5 \
+  --retry-delay 2000
+```
+
+## 🔧 Command Line Usage
 
 ```bash
 leantime-mcp <url> --token <token> [options]
@@ -109,8 +323,6 @@ leantime-mcp <url> --token <token> [options]
 | Method | Header Format | Example |
 |--------|---------------|---------|
 | `Bearer` (default) | `Authorization: Bearer <token>` | `--auth-method Bearer` |
-| `ApiKey` | `Authorization: ApiKey <token>` | `--auth-method ApiKey` |
-| `Token` | `Authorization: Token <token>` | `--auth-method Token` |
 | `X-API-Key` | `X-API-Key: <token>` | `--auth-method X-API-Key` |
 
 ### Examples
@@ -326,7 +538,7 @@ For issues and questions:
 
 ## 📋 Changelog
 
-### 2.0.0 (Latest)
+### 1.6.0 (Latest)
 - 🎉 **Complete TypeScript rewrite** using official MCP SDK
 - ✨ **Multiple authentication methods** (Bearer, ApiKey, Token, X-API-Key)
 - 🚀 **Enhanced protocol support** (MCP 2025-03-26 + backward compatibility)
