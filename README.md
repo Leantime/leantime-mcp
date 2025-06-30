@@ -1,4 +1,4 @@
-# Leantime MCP Bridge v2.0
+# Leantime MCP Bridge
 
 A robust Model Context Protocol (MCP) proxy bridge for Leantime project management system. Built with TypeScript and the official MCP SDK, this tool provides a reliable bridge between MCP clients and Leantime servers.
 
