@@ -9,7 +9,6 @@ A robust Model Context Protocol (MCP) proxy bridge for Leantime project manageme
 - **Protocol Version Support**: MCP 2025-03-26 (latest) with backward compatibility
 - **Advanced Transport Support**: HTTP/HTTPS, Server-Sent Events (SSE), and streaming responses
 - **TypeScript Implementation**: Type-safe, maintainable codebase
-- **Drop-in Replacement**: Same CLI interface as v1.x for easy migration
 
 ## 🚀 Installation
 
