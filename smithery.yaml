@@ -1,0 +1,50 @@
+runtime: "container"
+
+startCommand:
+  type: "http"
+  configSchema:
+    type: "object"
+    properties:
+      LEANTIME_SERVER_URL:
+        type: "string"
+        description: "Base URL of the Leantime server"
+        default: ""
+      LEANTIME_API_TOKEN:
+        type: "string"
+        description: "API token for authenticating with Leantime server"
+        default: ""
+      AUTH_METHOD:
+        type: "string"
+        description: "Authentication method (Bearer, ApiKey, Token, X-API-Key)"
+        enum: ["Bearer", "ApiKey", "Token", "X-API-Key"]
+        default: "Bearer"
+      SKIP_SSL:
+        type: "boolean"
+        description: "Skip SSL verification for insecure connections"
+        default: false
+      MAX_RETRIES:
+        type: "integer"
+        description: "Maximum retry attempts for failed requests"
+        default: 3
+        minimum: 0
+        maximum: 10
+      RETRY_DELAY:
+        type: "integer"
+        description: "Base retry delay in milliseconds"
+        default: 1000
+        minimum: 100
+        maximum: 10000
+      DISABLE_CACHE:
+        type: "boolean"
+        description: "Disable response caching"
+        default: false
+    required:
+      - "LEANTIME_SERVER_URL"
+      - "LEANTIME_API_TOKEN"
+
+build:
+  dockerfile: "Dockerfile"
+  dockerBuildPath: "."
+
+env:
+  NODE_ENV: "production"

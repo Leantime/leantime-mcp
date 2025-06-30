@@ -4,19 +4,19 @@ import { URL } from 'url';
 import https from 'https';
 import http from 'http';
 
-interface AuthConfig {
+export interface AuthConfig {
   method: 'Bearer' | 'ApiKey' | 'Token' | 'X-API-Key';
   token: string;
 }
 
-interface RetryConfig {
+export interface RetryConfig {
   maxRetries: number;
   baseDelay: number;
   maxDelay: number;
   jitter: boolean;
 }
 
-interface ProxyConfig {
+export interface ProxyConfig {
   serverUrl: string;
   auth: AuthConfig;
   skipSsl: boolean;
@@ -558,6 +558,26 @@ export class LeantimeMcpProxy {
 
   private logError(message: string, error?: any): void {
     console.error(`[LeantimeMCP ERROR] ${message}`, error || '');
+  }
+
+  // HTTP server method for Smithery integration
+  async handleHttpRequest(request: any): Promise<any> {
+    try {
+      // Use the same retry logic as the stdin/stdout version
+      const response = await this.sendToServerWithRetry(request);
+      return response;
+    } catch (error) {
+      this.logError('HTTP request failed:', error);
+      return {
+        jsonrpc: '2.0',
+        id: request?.id || null,
+        error: {
+          code: -32603,
+          message: 'Internal error',
+          data: error instanceof Error ? error.message : String(error)
+        }
+      };
+    }
   }
 }
 
