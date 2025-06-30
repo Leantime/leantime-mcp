@@ -633,6 +633,14 @@ function parseArgs(): ProxyConfig {
     }
   }
 
+  // Check for environment variable fallbacks
+  if (!serverUrl) {
+    serverUrl = process.env.LEANTIME_SERVER_URL || '';
+  }
+  if (!token) {
+    token = process.env.LEANTIME_API_TOKEN || '';
+  }
+
   if (!serverUrl || !token) {
     console.error('Usage: leantime-mcp <url> --token <token> [options]');
     console.error('');
@@ -644,9 +652,14 @@ function parseArgs(): ProxyConfig {
     console.error('  --retry-delay <ms>       Base retry delay in milliseconds (default: 1000)');
     console.error('  --no-cache               Disable response caching');
     console.error('');
+    console.error('Environment Variables:');
+    console.error('  LEANTIME_SERVER_URL      Leantime server URL (alternative to <url> argument)');
+    console.error('  LEANTIME_API_TOKEN       API token for authentication (alternative to --token)');
+    console.error('');
     console.error('Examples:');
     console.error('  leantime-mcp https://leantime.example.com/mcp --token abc123');
     console.error('  leantime-mcp https://leantime.example.com/mcp --token abc123 --auth-method ApiKey');
+    console.error('  LEANTIME_SERVER_URL=https://leantime.example.com/mcp LEANTIME_API_TOKEN=abc123 leantime-mcp');
     console.error('  leantime-mcp https://leantime.example.com/mcp --token abc123 --max-retries 5 --no-cache');
     process.exit(1);
   }
