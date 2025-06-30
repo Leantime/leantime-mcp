@@ -595,11 +595,9 @@ async function main() {
         process.exit(1);
     }
 }
-// Run if this is the main module
-if (import.meta.url === `file://${process.argv[1]}`) {
-    main().catch(error => {
-        console.error('Unhandled error:', error);
-        process.exit(1);
-    });
-}
+// Run if this is the main module (always run for bin scripts)
+main().catch(error => {
+    console.error('Unhandled error:', error);
+    process.exit(1);
+});
 //# sourceMappingURL=index.js.map
