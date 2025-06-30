@@ -10,6 +10,10 @@ A robust Model Context Protocol (MCP) proxy bridge for Leantime project manageme
 - **Advanced Transport Support**: HTTP/HTTPS, Server-Sent Events (SSE), and streaming responses
 - **TypeScript Implementation**: Type-safe, maintainable codebase
 
+## Pre-Requisites
+- If you are self hosted, you need the MCPServer Plugin https://marketplace.leantime.io/product/mcp-server/
+- Personal access token (or api-key) generated through the Leantime UI
+
 ## 🚀 Installation
 
 ### From npm
@@ -39,7 +43,7 @@ Add to your `claude_desktop_config.json`:
     "leantime": {
       "command": "leantime-mcp",
       "args": [
-        "https://your-leantime.com/mcp",
+        "https://yourworkspace.leantime.io/mcp",
         "--token",
         "YOUR_TOKEN_HERE"
       ]
@@ -55,7 +59,7 @@ Add to your `claude_desktop_config.json`:
     "leantime": {
       "command": "leantime-mcp",
       "args": [
-        "https://leantime-oss.test/mcp",
+        "https://yourworkspace.leantime.io/mcp",
         "--token",
         "YOUR_TOKEN_HERE",
         "--insecure"
@@ -89,7 +93,7 @@ Add to your `claude_desktop_config.json`:
     "leantime": {
       "command": "leantime-mcp",
       "args": [
-        "https://your-leantime.com/mcp",
+        "https://yourworkspace.leantime.io/mcp",
         "--token",
         "YOUR_TOKEN_HERE",
         "--auth-method",
@@ -116,7 +120,7 @@ For Claude Code, add to your `claude_config.json` or use the command line:
       "leantime": {
         "command": "leantime-mcp",
         "args": [
-          "https://your-leantime.com/mcp",
+          "https://yourworkspace.leantime.io/mcp",
           "--token",
           "YOUR_TOKEN_HERE"
         ]
@@ -142,7 +146,7 @@ For Cursor IDE, add to your workspace settings or global settings:
     "leantime": {
       "command": "leantime-mcp",
       "args": [
-        "https://your-leantime.com/mcp",
+        "https://yourworkspace.leantime.io/mcp",
         "--token",
         "YOUR_TOKEN_HERE"
       ]
@@ -158,7 +162,7 @@ Open Cursor Settings → Extensions → MCP and add:
   "leantime": {
     "command": "leantime-mcp",
     "args": [
-      "https://your-leantime.com/mcp",
+      "https://yourworkspace.leantime.io/mcp",
       "--token",
       "YOUR_TOKEN_HERE"
     ]
@@ -180,7 +184,7 @@ from mcp_client import MCPClient
 mcp_client = MCPClient(
     command="leantime-mcp",
     args=[
-        "https://your-leantime.com/mcp",
+        "https://yourworkspace.leantime.io/mcp",
         "--token",
         "YOUR_TOKEN_HERE"
     ]
@@ -203,7 +207,7 @@ info:
   title: Leantime MCP Proxy
   version: 2.0.0
 servers:
-  - url: https://your-leantime.com/mcp
+  - url: https://yourworkspace.leantime.io/mcp
 paths:
   /tools/list:
     post:
@@ -242,7 +246,7 @@ For any MCP-compatible client:
   "name": "leantime",
   "command": "leantime-mcp",
   "args": [
-    "https://your-leantime.com/mcp",
+    "https://yourworkspace.leantime.io/mcp",
     "--token",
     "YOUR_TOKEN_HERE"
   ],
@@ -259,7 +263,7 @@ version: '3.8'
 services:
   leantime-mcp:
     image: node:18-alpine
-    command: npx leantime-mcp https://your-leantime.com/mcp --token YOUR_TOKEN_HERE
+    command: npx leantime-mcp https://yourworkspace.leantime.io/mcp --token YOUR_TOKEN_HERE
     environment:
       - NODE_ENV=production
     volumes:
