@@ -1,1 +1,27 @@
 runtime: typescript
+name: leantime-mcp-server
+description: "A Model Context Protocol (MCP) server for Leantime project management system"
+environment:
+  LEANTIME_SERVER_URL:
+    description: "URL of your Leantime server MCP endpoint"
+    required: true
+    example: "https://leantime.example.com/mcp"
+  LEANTIME_API_TOKEN:
+    description: "API token for authentication with Leantime"
+    required: true
+    secret: true
+  LEANTIME_AUTH_METHOD:
+    description: "Authentication method (Bearer, ApiKey, Token, X-API-Key)"
+    default: "Bearer"
+  LEANTIME_SKIP_SSL:
+    description: "Skip SSL verification (true/false)"
+    default: "false"
+  LEANTIME_MAX_RETRIES:
+    description: "Maximum retry attempts for failed requests"
+    default: "3"
+  LEANTIME_RETRY_DELAY:
+    description: "Base retry delay in milliseconds"
+    default: "1000"
+  LEANTIME_DISABLE_CACHE:
+    description: "Disable response caching (true/false)"
+    default: "false"

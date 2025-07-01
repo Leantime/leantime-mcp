@@ -4,6 +4,7 @@
   "description": "A Model Context Protocol (MCP) proxy bridge for Leantime project management system",
   "type": "module",
   "main": "dist/index.js",
+  "module": "./src/index.ts",
   "bin": {
     "leantime-mcp": "./bin/leantime-mcp.js"
   },
