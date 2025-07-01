@@ -12,6 +12,7 @@
     "build": "tsc && chmod +x bin/leantime-mcp.js",
     "dev": "tsc --watch",
     "start": "node bin/leantime-mcp.js",
+    "postinstall": "npm run build",
     "prepublishOnly": "npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
