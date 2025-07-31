@@ -1,6 +1,6 @@
 {
   "name": "leantime-mcp",
-  "version": "1.6.4",
+  "version": "1.6.5",
   "description": "A Model Context Protocol (MCP) proxy bridge for Leantime project management system",
   "type": "module",
   "main": "./dist/index.js",
