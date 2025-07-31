@@ -337,7 +337,7 @@ leantime-mcp https://leantime.example.com/mcp --token abc123
 
 #### Using API Key authentication
 ```bash
-leantime-mcp https://leantime.example.com/mcp --token abc123 --auth-method ApiKey
+leantime-mcp https://leantime.example.com/mcp --token abc123 --auth-method x-api-key
 ```
 
 #### Local development with self-signed certificates

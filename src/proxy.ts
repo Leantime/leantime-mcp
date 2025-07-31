@@ -184,18 +184,14 @@ export class LeantimeMcpProxy {
 
   private addAuthHeader(headers: Record<string, string>): void {
     const { method, token } = this.config.auth;
-    
-    switch (method) {
-      case 'X-API-Key':
+
+    switch (method.toLowerCase()) {
+      case 'apikey':
+      case 'x-api-key':
         headers['X-API-Key'] = token;
         break;
-      case 'ApiKey':
-        headers['Authorization'] = `ApiKey ${token}`;
-        break;
-      case 'Token':
-        headers['Authorization'] = `Token ${token}`;
-        break;
-      case 'Bearer':
+      case 'token':
+      case 'bearer':
       default:
         headers['Authorization'] = `Bearer ${token}`;
         break;
