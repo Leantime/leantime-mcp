@@ -173,6 +173,9 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
+// Export main function for use by the wrapper
+export { main };
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch(error => {
     console.error('Unhandled error:', error);
