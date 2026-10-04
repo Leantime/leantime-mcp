@@ -1,6 +1,6 @@
 {
   "name": "leantime-mcp",
-  "version": "1.6.5",
+  "version": "1.6.6",
   "description": "A Model Context Protocol (MCP) proxy bridge for Leantime project management system",
   "type": "module",
   "main": "./dist/index.js",
@@ -9,11 +9,10 @@
     "leantime-mcp": "./bin/leantime-mcp.js"
   },
   "scripts": {
-    "build": "tsc && chmod +x bin/leantime-mcp.js",
+    "build": "tsc",
     "dev": "tsc --watch",
     "start": "node bin/leantime-mcp.js",
-    "postinstall": "npm run build",
-    "prepublishOnly": "npm run build",
+    "prepare": "npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
@@ -43,7 +42,6 @@
     "dist/",
     "README.md",
     "LICENSE",
-    "Dockerfile",
     "smithery.yaml"
   ],
   "dependencies": {

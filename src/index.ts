@@ -8,8 +8,14 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
+import { realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { LeantimeMcpProxy } from './proxy.js';
 import { parseArgs } from './config.js';
+
+// Report the real package version (it was hardcoded and drifted from package.json).
+const packageVersion: string = createRequire(import.meta.url)('../package.json').version;
 
 async function createServer(): Promise<Server> {
   const config = parseArgs();
@@ -18,7 +24,7 @@ async function createServer(): Promise<Server> {
   const server = new Server(
     {
       name: 'leantime-mcp',
-      version: '1.6.2',
+      version: packageVersion,
     },
     {
       capabilities: {
@@ -46,7 +52,7 @@ async function createServer(): Promise<Server> {
             },
             clientInfo: {
               name: 'leantime-mcp',
-              version: '1.6.2'
+              version: packageVersion
             }
           }
         };
@@ -176,7 +182,23 @@ process.on('SIGTERM', () => {
 // Export main function for use by the wrapper
 export { main };
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// True when this file is executed directly (`node dist/index.js ...`) rather than imported by
+// the bin wrapper. Compare real file URLs: a hand-built `file://${argv[1]}` never matches on
+// Windows (backslashes, drive letter) or through symlinks, so the server silently never started.
+function isDirectRun(): boolean {
+  const entryPath = process.argv[1];
+  if (!entryPath) {
+    return false;
+  }
+
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entryPath)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
   main().catch(error => {
     console.error('Unhandled error:', error);
     process.exit(1);
